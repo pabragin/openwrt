@@ -10,26 +10,36 @@ Signed-off-by: Pavel Bragin <pabragin@yandex.ru>
 diff -ruN ka/drivers/net/ethernet/airoha/airoha_eth.c kb/drivers/net/ethernet/airoha/airoha_eth.c
 --- a/drivers/net/ethernet/airoha/airoha_eth.c	2026-10-15 14:52:28.851304211 +0000
 +++ b/drivers/net/ethernet/airoha/airoha_eth.c	2026-10-15 14:52:28.859785670 +0000
-@@ -4618,9 +4618,29 @@
+@@ -4618,9 +4618,39 @@
  };
  MODULE_DEVICE_TABLE(of, of_airoha_match);
  
-+/* Disable frame engine DMA on reboot so stale rings are not written while
-+ * the bootloader loads the next image after a warm reset.
++/* Stop the frame engine on reboot. A warm reset leaves it running, and
++ * packets still arriving from the GDM ports would otherwise be written
++ * into RAM while the bootloader relocates itself there.
 + */
 +static void airoha_shutdown(struct platform_device *pdev)
 +{
 +	struct airoha_eth *eth = platform_get_drvdata(pdev);
++	u32 busy = GLOBAL_CFG_TX_DMA_BUSY_MASK | GLOBAL_CFG_RX_DMA_BUSY_MASK;
++	u32 val;
 +	int i;
 +
 +	if (!eth)
 +		return;
++	for (i = AIROHA_GDM1_IDX; i <= AIROHA_GDM4_IDX; i++)
++		airoha_set_gdm_port_fwd_cfg(eth, REG_GDM_FWD_CFG(i),
++					    FE_PSE_PORT_DROP);
 +	for (i = 0; i < ARRAY_SIZE(eth->qdma); i++) {
-+		if (!eth->qdma[i].regs)
++		struct airoha_qdma *qdma = &eth->qdma[i];
++
++		if (!qdma->regs)
 +			continue;
-+		airoha_qdma_clear(&eth->qdma[i], REG_QDMA_GLOBAL_CFG,
++		airoha_qdma_clear(qdma, REG_QDMA_GLOBAL_CFG,
 +				  GLOBAL_CFG_TX_DMA_EN_MASK |
 +				  GLOBAL_CFG_RX_DMA_EN_MASK);
++		readl_poll_timeout(qdma->regs + REG_QDMA_GLOBAL_CFG, val,
++				   !(val & busy), 10, 10000);
 +	}
 +}
 +
