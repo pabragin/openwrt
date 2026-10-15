@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+# JFFS2 on the SPI-NAND of the Xiaomi BE5000 corrupts pages it programs
+# twice (cleanmarker in OOB, then data), so the overlay lives in a UBI
+# volume. Format the "ubi" partition if it holds no UBI yet and create
+# the rootfs_data volume before mount_root looks for it.
+ubi_rootfs_data() {
+	local mtdnum ubidir ubidev
+
+	case "$(board_name)" in
+	xiaomi,be5000) ;;
+	*) return 0 ;;
+	esac
+
+	mtdnum="$(find_mtd_index ubi)"
+	[ -n "$mtdnum" ] || return 0
+
+	for ubidir in /sys/class/ubi/ubi*; do
+		[ "$(cat "$ubidir/mtd_num" 2>/dev/null)" = "$mtdnum" ] && ubidev="${ubidir##*/}"
+	done
+
+	if [ -z "$ubidev" ]; then
+		echo "- formatting UBI on mtd$mtdnum -"
+		ubiformat "/dev/mtd$mtdnum" -y -q || return 0
+		ubiattach -m "$mtdnum" >/dev/null || return 0
+		for ubidir in /sys/class/ubi/ubi*; do
+			[ "$(cat "$ubidir/mtd_num" 2>/dev/null)" = "$mtdnum" ] && ubidev="${ubidir##*/}"
+		done
+		[ -n "$ubidev" ] || return 0
+	fi
+
+	for ubidir in /sys/class/ubi/${ubidev}_*; do
+		[ "$(cat "$ubidir/name" 2>/dev/null)" = rootfs_data ] && return 0
+	done
+
+	echo "- creating rootfs_data UBI volume -"
+	ubimkvol "/dev/$ubidev" -N rootfs_data -m >/dev/null
+}
+
+boot_hook_add preinit_main ubi_rootfs_data
