@@ -1,0 +1,40 @@
+From: Pavel Bragin <pabragin@yandex.ru>
+Subject: [PATCH] mt76: mt7996: stop bus mastering on shutdown
+
+A warm reboot on Airoha AN7563 does not reset the radio. Clear bus
+mastering so it cannot write into RAM while the bootloader loads the
+next image.
+
+Signed-off-by: Pavel Bragin <pabragin@yandex.ru>
+---
+--- a/mt7996/pci.c	2026-10-15 14:52:28.850268670 +0000
++++ b/mt7996/pci.c	2026-10-15 14:52:28.859350336 +0000
+@@ -249,11 +249,20 @@
+ 	mt7996_unregister_device(dev);
+ }
+ 
++/* Stop bus mastering on reboot: without a full SoC reset the radio could
++ * otherwise keep writing into RAM while the bootloader loads the next image.
++ */
++static void mt7996_pci_shutdown(struct pci_dev *pdev)
++{
++	pci_clear_master(pdev);
++}
++
+ struct pci_driver mt7996_hif_driver = {
+ 	.name		= KBUILD_MODNAME "_hif",
+ 	.id_table	= mt7996_hif_device_table,
+ 	.probe		= mt7996_pci_probe,
+ 	.remove		= mt7996_hif_remove,
++	.shutdown	= mt7996_pci_shutdown,
+ };
+ 
+ struct pci_driver mt7996_pci_driver = {
+@@ -261,6 +270,7 @@
+ 	.id_table	= mt7996_pci_device_table,
+ 	.probe		= mt7996_pci_probe,
+ 	.remove		= mt7996_pci_remove,
++	.shutdown	= mt7996_pci_shutdown,
+ };
+ 
+ MODULE_DEVICE_TABLE(pci, mt7996_pci_device_table);

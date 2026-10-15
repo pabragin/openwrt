@@ -1,0 +1,75 @@
+From: Pavel Bragin <pabragin@yandex.ru>
+Subject: [PATCH] net: airoha: quiesce DMA engines on shutdown
+
+A warm reboot on AN7563 does not reset the frame engine or the AN7552
+NPU. Stop QDMA, TDMA and the NPU cores so none of them writes into RAM
+while the bootloader loads the next image.
+
+Signed-off-by: Pavel Bragin <pabragin@yandex.ru>
+---
+diff -ruN ka/drivers/net/ethernet/airoha/airoha_eth.c kb/drivers/net/ethernet/airoha/airoha_eth.c
+--- a/drivers/net/ethernet/airoha/airoha_eth.c	2026-10-15 14:52:28.851304211 +0000
++++ b/drivers/net/ethernet/airoha/airoha_eth.c	2026-10-15 14:52:28.859785670 +0000
+@@ -4618,9 +4618,29 @@
+ };
+ MODULE_DEVICE_TABLE(of, of_airoha_match);
+ 
++/* Disable frame engine DMA on reboot so stale rings are not written while
++ * the bootloader loads the next image after a warm reset.
++ */
++static void airoha_shutdown(struct platform_device *pdev)
++{
++	struct airoha_eth *eth = platform_get_drvdata(pdev);
++	int i;
++
++	if (!eth)
++		return;
++	for (i = 0; i < ARRAY_SIZE(eth->qdma); i++) {
++		if (!eth->qdma[i].regs)
++			continue;
++		airoha_qdma_clear(&eth->qdma[i], REG_QDMA_GLOBAL_CFG,
++				  GLOBAL_CFG_TX_DMA_EN_MASK |
++				  GLOBAL_CFG_RX_DMA_EN_MASK);
++	}
++}
++
+ static struct platform_driver airoha_driver = {
+ 	.probe = airoha_probe,
+ 	.remove = airoha_remove,
++	.shutdown = airoha_shutdown,
+ 	.driver = {
+ 		.name = KBUILD_MODNAME,
+ 		.of_match_table = of_airoha_match,
+diff -ruN ka/drivers/net/ethernet/airoha/an7552_npu.c kb/drivers/net/ethernet/airoha/an7552_npu.c
+--- a/drivers/net/ethernet/airoha/an7552_npu.c	2026-10-15 14:52:28.852289586 +0000
++++ b/drivers/net/ethernet/airoha/an7552_npu.c	2026-10-15 14:52:28.859635670 +0000
+@@ -1383,6 +1383,21 @@
+ 		halt_cores(ctx);
+ }
+ 
++/* A warm reboot does not reset the NPU or TDMA. Stop both so they cannot
++ * write into RAM while the bootloader loads the next image.
++ */
++static void an7552_npu_shutdown(struct platform_device *pdev)
++{
++	struct an7552_npu *ctx = platform_get_drvdata(pdev);
++
++	if (!ctx)
++		return;
++	if (ctx->tdma_enabled)
++		writel(readl(ctx->fe + 0xa04) & ~BIT(2), ctx->fe + 0xa04);
++	if (ctx->running)
++		halt_cores(ctx);
++}
++
+ static const struct of_device_id an7552_npu_match[] = {
+ 	{ .compatible = "airoha,an7552-npu" },
+ 	{}
+@@ -1392,6 +1407,7 @@
+ static struct platform_driver an7552_npu_driver = {
+ 	.probe = an7552_npu_probe,
+ 	.remove = an7552_npu_remove,
++	.shutdown = an7552_npu_shutdown,
+ 	.driver = {
+ 		.name = "an7552-npu",
+ 		.of_match_table = an7552_npu_match,
