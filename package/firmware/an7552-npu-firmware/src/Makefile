@@ -23,13 +23,17 @@ endif
 ifeq ($(PROF),1)
 CFLAGS += -DNPU_PROF
 endif
+# UPSPLIT=0: keep the single-core upload path (no boot probe).
+ifeq ($(UPSPLIT),0)
+CFLAGS += -DUP_SPLIT_ENABLE=0
+endif
 
 all: build/an7552.bin
 
 build:
 	mkdir -p $@
 
-build/%.o: %.c protocol.h firmware-abi.h native-tx.c.inc station.c.inc tdma.c.inc tx-pool.c.inc txfree.c.inc rro.c.inc ppe.c.inc ppe-split.c.inc pn.c.inc pn-cache.h rx-security.c.inc rx-parse.h pkt-view.h prof.h prof-sub.h | build
+build/%.o: %.c protocol.h firmware-abi.h native-tx.c.inc station.c.inc tdma.c.inc tx-pool.c.inc txfree.c.inc rro.c.inc ppe.c.inc ppe-split.c.inc upsplit.c.inc pn.c.inc pn-cache.h rx-security.c.inc rx-parse.h pkt-view.h prof.h prof-sub.h | build
 	$(CC) $(CFLAGS) -c $< -o $@
 
 build/start.o: start.S firmware-abi.h | build
@@ -45,7 +49,7 @@ build/an7552.bin: build/an7552.elf
 .PHONY: all
 
 HOSTCC ?= cc
-TESTS := pn pn-cache rx-batch rx-ownership rx-refill rx-parse station-frame txfree tx-pool ppe-cache ppe-split
+TESTS := pn pn-cache rx-batch rx-ownership rx-refill rx-parse station-frame txfree tx-pool ppe-cache ppe-split up-pipe up-split
 
 build/test-%: tests/%.c $(wildcard *.h *.c.inc) | build
 	$(HOSTCC) -O2 -Wall -Wextra -Werror -pthread $< -o $@
@@ -54,4 +58,10 @@ check: $(addprefix build/test-,$(TESTS))
 	@set -e; for test in $^; do $$test; done
 
 .PHONY: check
+
+# Mutation check of the upload pipeline tests (each mutant must fail).
+mutate:
+	python3 tests/mutate-upsplit.py
+
+.PHONY: mutate
 

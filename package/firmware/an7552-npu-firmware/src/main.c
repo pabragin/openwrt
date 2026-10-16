@@ -23,6 +23,7 @@ static uint32_t read32(uint32_t address)
 #include "rx-parse.h"
 #include "rro.c.inc"
 #include "ppe.c.inc"
+#include "upsplit.c.inc"
 #include "prof.h"
 
 void firmware_main(uint32_t core)
@@ -31,8 +32,9 @@ void firmware_main(uint32_t core)
 		(void *)(uintptr_t)(AN7552_NPU_BASE + core * AN7552_STRIDE);
 	volatile uint32_t *tdma_state =
 		(void *)(uintptr_t)(AN7552_NPU_BASE + AN7552_STRIDE);
-	uint32_t heartbeat = 0;
+	uint32_t heartbeat = 0, split;
 	struct tx_band download[2] = { { 0 } };
+	struct up_front upload = { 0 };
 
 	state[1] = 0;
 	state[2] = 0;
@@ -44,6 +46,8 @@ void firmware_main(uint32_t core)
 	if (!core)
 		tx_pool_boot();
 	ppe_split_boot(core);
+	/* Upload pipeline (upsplit.c.inc) if both cores share its memory. */
+	split = up_boot(core);
 	barrier();
 	state[0] = AN7552_MAGIC;
 	PROF_DECLARE(prof, core);
@@ -61,8 +65,12 @@ void firmware_main(uint32_t core)
 		}
 		state[1] = ++heartbeat;
 		if (core) {
-			PROF(prof, 1, native_pn_service());
-			PROF(prof, 2, native_ppe_service());
+			if (!split) {
+				PROF(prof, 1, native_pn_service());
+				PROF(prof, 2, native_ppe_service());
+			} else {
+				PROF(prof, 2, up_ppe_service());
+			}
 			if (read32(AN7552_NPU_BASE + AN7552_STATION_CONTROL)) {
 				barrier();
 				*(volatile uint32_t
@@ -74,15 +82,30 @@ void firmware_main(uint32_t core)
 			*(volatile uint32_t
 				  *)(uintptr_t)(AN7552_NPU_BASE +
 						AN7552_STATION_CONTROL + 8) = 0;
-			/* Core 1 owns the whole Wi-Fi -> Ethernet direction. */
-			PROF(prof, 3, native_rro_receive());
+			/* Single-core mode: core 1 owns the whole Wi-Fi -> Ethernet
+			 * direction. Pipeline mode: the back half of it.
+			 */
+			if (split)
+				PROF(prof, 3, native_up_back());
+			else
+				PROF(prof, 3, native_rro_receive());
 			continue;
 		}
 		PROF(prof, 1, native_txfree(0); native_txfree(1));
 		/* PPE return pops for core 1 (ppe-split.c.inc). Before the
 		 * station quiesce so that a PPE stop never waits on it.
 		 */
-		PROF(prof, 3, native_ppe_pop());
+		if (!split || !UP_POP_CORE)
+			PROF(prof, 3, native_ppe_pop());
+		if (split) {
+			/* Upload front half: replay service, then at most
+			 * UP_FRONT_BUDGET frames, then download. It never reads
+			 * the station table, so it also runs during a station
+			 * quiesce and an RRO stop never waits on that.
+			 */
+			PROF(prof, 6, up_pn_service());
+			PROF(prof, 5, native_up_front(&upload));
+		}
 		if (read32(AN7552_NPU_BASE + AN7552_STATION_CONTROL)) {
 			barrier();
 			*(volatile uint32_t

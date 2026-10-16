@@ -29,7 +29,11 @@ and each core's runtime ABI announcement before enabling packet queues.
 tree must reserve the firmware workspace and packet buffers before boot.
 
 Core 0 submits Wi-Fi transmit descriptors and processes transmit completion.
-Core 1 processes receive reordering, replay checks and Ethernet PPE input.
+The receive path is a two-stage pipeline (`upsplit.c.inc`): core 0 reads the
+reordered receive descriptors, runs the replay checks and parses frames; core
+1 checks buffer state and station identity, feeds the Ethernet PPE or Linux,
+and owns every receive buffer. If the boot probe finds that the two cores do
+not share the record memory, core 1 runs the whole receive path.
 Queue enable/active handshakes transfer ownership between Linux and the
 firmware. A separate park handshake stops both cores before driver teardown
 or a new firmware load. Cross-core state publication uses RISC-V fences.

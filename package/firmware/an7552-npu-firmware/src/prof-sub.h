@@ -16,6 +16,16 @@
  *   6          core 1  batch setup, flush, retries      2c0 [14]
  *   8          core 0  band 1: radio ring full breaks   280 [13]
  *   9          core 0  band 1: token/in-flight breaks   280 [14]
+ *   10..14     core 0  upload front half (pipeline)     4c0 [2..6]
+ *
+ * In pipeline mode (upsplit.c.inc) core 1 words 0, 5 and 6 keep their
+ * meaning; 1..4 are the back half's parts of the same work:
+ *   1  record read, buffer state check, refill note
+ *   2  saved[1..5] writes for frames queued to the PPE
+ *   3  station identity check (moved here from core 0's parse)
+ *   4  key word + epoch/cookie check (the old fast recheck)
+ * Core 0 words: 10 RX descriptor read, 11 security view, 12 parse +
+ * classify, 13 record write + head publish, 14 batch setup/flush/EMI.
  */
 #ifndef AN7552_PROF_SUB_H
 #define AN7552_PROF_SUB_H

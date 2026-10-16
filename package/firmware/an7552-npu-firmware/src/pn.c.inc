@@ -26,7 +26,12 @@ static uint32_t pn_compare(uint32_t wcid, uint32_t tid, uint32_t low,
 	entry[40 + tid] = 0;
 	return 1;
 }
-static void native_pn_service(void)
+/* epoch: with the upload pipeline (upsplit.c.inc) the replay table belongs
+ * to core 0, and core 1 may still forward frames that core 0 validated
+ * before this request. Key installs and snapshots bump the epoch before they
+ * touch the entry, so core 1 re-checks such frames against the entry.
+ */
+static void pn_service_run(volatile uint32_t *epoch)
 {
 	volatile uint32_t *q =
 		(void *)(uintptr_t)(AN7552_NPU_BASE + PN_CONTROL);
@@ -35,6 +40,10 @@ static void native_pn_service(void)
 	if (!request || request == q[8] || q[9])
 		return;
 	barrier();
+	if (epoch && (q[1] == 2 || q[1] == 3)) {
+		*epoch += 1;
+		barrier();
+	}
 	if (q[1] == 1)
 		result = pn_compare(q[2], q[3], q[4], q[5]);
 	else if (q[1] == 2 && q[2] < AN7552_STATION_COUNT) {
@@ -67,4 +76,9 @@ static void native_pn_service(void)
 	q[7] = result;
 	barrier();
 	q[8] = request;
+}
+
+static void native_pn_service(void)
+{
+	pn_service_run(0);
 }

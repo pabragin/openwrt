@@ -13,6 +13,21 @@
  *       (core 0: forward[10], core 1: RRO q[7])
  *   [15] PROF_MAGIC
  *
+ * Upload pipeline (upsplit.c.inc). Core 1 [3] is the back half
+ * (native_up_back) and [2] includes the PPE return pop (UP_POP_CORE=1),
+ * [1] stays 0 because the PN service moved to core 0. Core 0 [3] (pop)
+ * is then 0. Core 0 publishes its upload work in row 4c0 (NPU_BASE+0x4c0,
+ * free otherwise, written only by profile images):
+ *   4c0 [0] cycles >> 8 of native_up_front (front half, all of it)
+ *   4c0 [1] cycles >> 8 of the PN service on core 0
+ *   4c0 [2..6] SUBPROF only, cycles >> 8 of the front sub-sections:
+ *       RX descriptor read, security view, parse + classify,
+ *       record write + head publish, batch setup/flush/EMI
+ *   4c0 [7] US_HEAD snapshot (records produced) taken with the publish
+ *   4c0 [15] PROF_UP_MAGIC
+ * The core 0 activity marker also counts US_HEAD, so front-half iterations
+ * count as busy.
+ *
  * Sums are kept in 64-bit locals and published every 256 iterations, so the
  * 32-bit words wrap after 2^40 cycles (~23 min at 800 MHz); use modular
  * differences between two samples.
@@ -29,6 +44,8 @@
 #define PROF_MAGIC 0x9f0f0002U
 #endif
 #define PROF_BASE 0x280U
+#define PROF_UP_BASE 0x4c0U
+#define PROF_UP_MAGIC 0x9f0f0a01U
 
 struct prof {
 	uint64_t sum[8];
@@ -85,7 +102,8 @@ static uint32_t prof_marker(uint32_t core)
 		return read32(AN7552_NPU_BASE + AN7552_RRO_CONTROL + 7 * 4);
 	return read32(AN7552_NPU_BASE + AN7552_FORWARD_CONTROL + 10 * 4) +
 	       read32(AN7552_NPU_BASE + AN7552_TXFREE_CONTROL + 7 * 4) +
-	       read32(AN7552_NPU_BASE + AN7552_TXFREE_CONTROL + 64 + 7 * 4);
+	       read32(AN7552_NPU_BASE + AN7552_TXFREE_CONTROL + 64 + 7 * 4) +
+	       up_ctrl()[US_HEAD];
 }
 
 static void prof_init(struct prof *p, uint32_t core)
@@ -105,6 +123,10 @@ static void prof_init(struct prof *p, uint32_t core)
 		p->diag[i] = 0;
 #endif
 	prof_slots(core)[15] = PROF_MAGIC;
+	if (!core)
+		((volatile uint32_t *)(uintptr_t)(AN7552_NPU_BASE +
+						  PROF_UP_BASE))[15] =
+			PROF_UP_MAGIC;
 	p->last = prof_cycle();
 }
 
@@ -145,13 +167,32 @@ static void prof_tick(struct prof *p, uint32_t core)
 		for (uint32_t i = 1; i < 7; i++)
 			out[8 + i] = (uint32_t)(p->sub[i] >> 8);
 	} else {
+		volatile uint32_t *up = (void *)(uintptr_t)(AN7552_NPU_BASE +
+							    PROF_UP_BASE);
+
 		prof_sample_download(p);
 		for (uint32_t i = 0; i < 4; i++)
 			out[9 + i] = p->diag[i];
 		out[13] = psub_words()[8];
 		out[14] = psub_words()[9];
+		/* Front half sub-sections: SRAM words 10..14. */
+		for (uint32_t i = 0; i < 5; i++) {
+			uint32_t v = psub_words()[10 + i];
+
+			p->sub[i] += v - p->sub_last[i];
+			p->sub_last[i] = v;
+			up[2 + i] = (uint32_t)(p->sub[i] >> 8);
+		}
 	}
 #endif
+	if (!core) {
+		volatile uint32_t *up = (void *)(uintptr_t)(AN7552_NPU_BASE +
+							    PROF_UP_BASE);
+
+		up[0] = (uint32_t)(p->sum[5] >> 8);
+		up[1] = (uint32_t)(p->sum[6] >> 8);
+		up[7] = up_ctrl()[US_HEAD];
+	}
 }
 
 #define PROF_DECLARE(p, core) struct prof p; prof_init(&p, core)

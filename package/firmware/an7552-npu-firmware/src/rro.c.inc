@@ -181,14 +181,22 @@ static void native_rx_release(uint32_t token)
 	q[21] = (q[21] + 1) % AN7552_RX_BUFFER_COUNT;
 	q[22]++;
 }
-static int native_rx_deliver(uint32_t token, uint32_t ppe_info)
+/* Copy one receive buffer to the Linux ring. saved[1..5] are the receive
+ * descriptor words 1..3, the security verdict and the replay cookie, read
+ * either from the DDR metadata of the token (frames returned by the PPE) or
+ * from an upload pipeline record in SRAM (upsplit.c.inc). The packet address
+ * is the token's buffer: every receive path checks that the descriptor
+ * address equals it before anything is saved or queued.
+ */
+static int rx_deliver_words(uint32_t token, uint32_t band,
+			    volatile uint32_t *saved, uint32_t ppe_info)
 {
 	volatile uint32_t *q =
 		(void *)(uintptr_t)(AN7552_NPU_BASE + AN7552_RRO_CONTROL);
-	volatile uint32_t *saved = rx_metadata(token), *data, *host,
-			  *completion, *sidecar;
-	volatile uint8_t *packet = (void *)rx_words(saved[0]), *destination;
-	uint32_t band = (st_get(token) >> 8) & 1;
+	volatile uint32_t *data, *host, *completion, *sidecar;
+	volatile uint8_t *packet = (void *)rx_words(AN7552_RX_BUFFER_HOST +
+						    token * 2048),
+			 *destination;
 	uint32_t length = (saved[1] >> 16) & 16383, producer = q[2], host_index,
 		 info, copied = 0;
 	data = (void *)(uintptr_t)(AN7552_NPU_BASE + AN7552_RX_DATA_CONTROL +
@@ -234,6 +242,12 @@ static int native_rx_deliver(uint32_t token, uint32_t ppe_info)
 	*(volatile uint32_t *)(uintptr_t)0x1ec0d1a8 = producer;
 	native_rx_release(token);
 	return 1;
+}
+
+static int native_rx_deliver(uint32_t token, uint32_t ppe_info)
+{
+	return rx_deliver_words(token, (st_get(token) >> 8) & 1,
+				rx_metadata(token), ppe_info);
 }
 /* Per-batch copies of shared indexes and counters, published once per batch. */
 struct rro_batch {
