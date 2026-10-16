@@ -34,7 +34,15 @@ ubi_rootfs_data() {
 	done
 
 	echo "- creating rootfs_data UBI volume -"
-	ubimkvol "/dev/$ubidev" -N rootfs_data -m >/dev/null
+	ubimkvol "/dev/$ubidev" -N rootfs_data -m >/dev/null || return 0
+
+	# mount_root opens the volume by its /dev node, which hotplug creates
+	# asynchronously; without it UBIFS fails with EINVAL on the first boot.
+	for ubidir in /sys/class/ubi/${ubidev}_*; do
+		[ "$(cat "$ubidir/name" 2>/dev/null)" = rootfs_data ] || continue
+		[ -c "/dev/${ubidir##*/}" ] || \
+			mknod "/dev/${ubidir##*/}" c $(tr ":" " " < "$ubidir/dev") 2>/dev/null
+	done
 }
 
 boot_hook_add preinit_main ubi_rootfs_data
