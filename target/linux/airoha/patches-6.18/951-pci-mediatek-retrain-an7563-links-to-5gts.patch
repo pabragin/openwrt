@@ -1,0 +1,45 @@
+From: Pavel Bragin <pavel@chartmogul.com>
+Subject: [PATCH] PCI: mediatek: retrain AN7563 links to 5 GT/s
+
+AN7563 root ports train at 2.5 GT/s and never move up, which caps Wi-Fi
+downloads of the MT7992 at about 1 Gbit/s. Retrain them to the highest
+speed they support once the link is up.
+
+---
+--- a/drivers/pci/controller/pcie-mediatek.c	2026-10-16 13:42:10.816594167 +0000
++++ b/drivers/pci/controller/pcie-mediatek.c	2026-10-16 13:42:10.824528167 +0000
+@@ -1361,6 +1361,34 @@
+ };
+ MODULE_DEVICE_TABLE(of, mtk_pcie_ids);
+ 
++/*
++ * AN7563 root ports train at 2.5 GT/s and stay there, although both they and
++ * the MT7992 endpoint support 5 GT/s. At 2.5 GT/s x1 the Wi-Fi TX DMA reads
++ * cap downloads at about 1 Gbit/s. Retrain once the link is up.
++ */
++static void an7563_pcie_retrain(struct pci_dev *dev)
++{
++	u32 lnkcap;
++	u16 lnksta;
++
++	pcie_capability_read_dword(dev, PCI_EXP_LNKCAP, &lnkcap);
++	pcie_capability_read_word(dev, PCI_EXP_LNKSTA, &lnksta);
++	if ((lnksta & PCI_EXP_LNKSTA_CLS) >= (lnkcap & PCI_EXP_LNKCAP_SLS))
++		return;
++
++	pcie_capability_clear_and_set_word(dev, PCI_EXP_LNKCTL2,
++					   PCI_EXP_LNKCTL2_TLS,
++					   lnkcap & PCI_EXP_LNKCAP_SLS);
++	if (pcie_retrain_link(dev, true))
++		pci_warn(dev, "link retrain failed\n");
++
++	pcie_capability_read_word(dev, PCI_EXP_LNKSTA, &lnksta);
++	pci_info(dev, "link retrained to %s\n",
++		 pci_speed_string(pcie_link_speed[lnksta & PCI_EXP_LNKSTA_CLS]));
++}
++DECLARE_PCI_FIXUP_FINAL(PCI_VENDOR_ID_MEDIATEK, 0x0810, an7563_pcie_retrain);
++DECLARE_PCI_FIXUP_FINAL(PCI_VENDOR_ID_MEDIATEK, 0x0811, an7563_pcie_retrain);
++
+ static struct platform_driver mtk_pcie_driver = {
+ 	.probe = mtk_pcie_probe,
+ 	.remove = mtk_pcie_remove,
