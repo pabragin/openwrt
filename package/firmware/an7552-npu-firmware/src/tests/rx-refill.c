@@ -36,6 +36,11 @@ __attribute__((unused)) static uint32_t packet_mac_high(volatile uint8_t *p)
 /* The SRAM state mirror and gate counters are mapped here. */
 #define RX_HEADER_ALIAS(host) ((volatile uint8_t *)rx_words(host))
 #include "../rro.c.inc"
+/* Core 0 pops PPE return entries concurrently on hardware; these tests run
+ * one pop inside every core 1 service call (tests/ppe-split.c interleaves
+ * the two harts).
+ */
+#define PPE_SPLIT_CORE0_HOOK() native_ppe_pop()
 #include "../ppe.c.inc"
 
 #define N AN7552_RX_RING_COUNT

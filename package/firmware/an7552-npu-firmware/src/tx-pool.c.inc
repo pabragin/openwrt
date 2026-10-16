@@ -21,12 +21,18 @@
 #define TX_INFLIGHT_CAP(band) ((band) ? TX_POOL_TOKENS : AN7552_TDMA_COUNT)
 /* Ring slots kept armed per band; an idle 2.4 GHz ring gives buffers back. */
 #define TX_ARM_CAP(band) ((band) ? AN7552_TDMA_COUNT : 512U)
+/* Never a ring index: forces a fresh radio consumer read. */
+#define TX_RADIO_STALE 0xffffffffU
 
 struct tx_pool {
 	uint32_t ready;
 	uint32_t free_buffers, free_tokens;
 	uint32_t inflight[2], arm[2];
 	uint32_t errors, high, completed;
+	/* Last radio consumer index read over PCIe, valid while the native
+	 * ring producer still equals radio_producer (see native_forward()).
+	 */
+	uint32_t radio_consumer[2], radio_producer[2];
 	uint16_t buffer[TX_POOL_BUFFERS];
 	uint16_t token[TX_POOL_TOKENS];
 	uint16_t token_buffer[TX_POOL_TOKENS];
@@ -89,6 +95,7 @@ static void tx_pool_start(uint32_t band, uint32_t start)
 	for (uint32_t i = 0; i < AN7552_TDMA_COUNT; i++)
 		p->slot[band][i] = band * AN7552_TDMA_COUNT + i;
 	p->arm[band] = start;
+	p->radio_producer[band] = TX_RADIO_STALE;
 	p->ready |= 1U << band;
 }
 
@@ -132,39 +139,38 @@ static int tx_pool_complete(uint32_t token)
 	return 0;
 }
 
-/* Refill consumed slots in ring order, then advance the CPU index once. */
+/* Refill consumed slots in ring order, then advance the CPU index once.
+ * Slots [arm, consumer) were consumed by native_forward() and hold no buffer
+ * the TDMA may write; every other slot is armed. native_forward() never lets
+ * the consumer reach arm from behind, so arm == consumer means "all armed".
+ */
 static void tx_pool_arm(uint32_t band, uint32_t consumer)
 {
 	struct tx_pool *p = tx_pool();
 	uint32_t registers = 0x1fb50900 + band * 16, last = 0, armed = 0;
+	uint32_t slot = p->arm[band];
+	uint32_t unarmed = (consumer + AN7552_TDMA_COUNT - slot) %
+			   AN7552_TDMA_COUNT;
 
-	while (p->arm[band] != consumer && p->free_buffers) {
-		uint32_t slot = p->arm[band], buffer, index;
-		uint32_t unarmed = (consumer + AN7552_TDMA_COUNT - slot) %
-				   AN7552_TDMA_COUNT;
-		volatile uint32_t *descriptor, *work;
+	while (unarmed && p->free_buffers &&
+	       AN7552_TDMA_COUNT - unarmed < TX_ARM_CAP(band)) {
+		uint32_t buffer = p->buffer[--p->free_buffers];
+		volatile uint32_t *descriptor =
+			(void *)(uintptr_t)(AN7552_TDMA_RING_NPU +
+					    (band * AN7552_TDMA_COUNT + slot) *
+						    32);
 
-		if (AN7552_TDMA_COUNT - unarmed >= TX_ARM_CAP(band))
-			break;
-		index = band * AN7552_TDMA_COUNT + slot;
-		work = (void *)(uintptr_t)(AN7552_FORWARD_WORK_NPU + index * 16);
-		if (work[0] != 2) {
-			p->errors++;
-			break;
-		}
-		buffer = p->buffer[--p->free_buffers];
-		descriptor = (void *)(uintptr_t)(AN7552_TDMA_RING_NPU + index * 32);
 		descriptor[2] = TX_BUFFER_HOST(buffer);
 		descriptor[1] = AN7552_TDMA_BUFFER_SIZE;
 		p->slot[band][slot] = buffer;
-		/* The descriptor is clean before core 1 may look at the slot. */
-		barrier();
-		work[0] = 0;
 		last = slot;
 		armed = 1;
-		p->arm[band] = (slot + 1) % AN7552_TDMA_COUNT;
+		unarmed--;
+		slot = (slot + 1) % AN7552_TDMA_COUNT;
 	}
 	if (armed) {
+		p->arm[band] = slot;
+		/* Descriptors are clean before the TDMA may use the slots. */
 		barrier();
 		*(volatile uint32_t *)(uintptr_t)(registers + 8) = last;
 	}
