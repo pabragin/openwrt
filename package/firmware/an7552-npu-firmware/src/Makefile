@@ -16,12 +16,20 @@ CFLAGS := $(COMPILER_FLAGS) -march=rv32imc_zicsr_zifencei \
 	-ffile-prefix-map=$(CURDIR)=. -O2 -g \
 	-Wall -Wextra -Werror -ffunction-sections -fdata-sections
 
+ifeq ($(SUBPROF),1)
+PROF := 1
+CFLAGS += -DNPU_SUBPROF
+endif
+ifeq ($(PROF),1)
+CFLAGS += -DNPU_PROF
+endif
+
 all: build/an7552.bin
 
 build:
 	mkdir -p $@
 
-build/%.o: %.c protocol.h firmware-abi.h native-tx.c.inc station.c.inc txfree.c.inc rro.c.inc ppe.c.inc pn.c.inc rx-security.c.inc rx-parse.h pkt-view.h | build
+build/%.o: %.c protocol.h firmware-abi.h native-tx.c.inc station.c.inc tdma.c.inc tx-pool.c.inc txfree.c.inc rro.c.inc ppe.c.inc ppe-split.c.inc pn.c.inc pn-cache.h rx-security.c.inc rx-parse.h pkt-view.h prof.h prof-sub.h | build
 	$(CC) $(CFLAGS) -c $< -o $@
 
 build/start.o: start.S firmware-abi.h | build
@@ -37,10 +45,10 @@ build/an7552.bin: build/an7552.elf
 .PHONY: all
 
 HOSTCC ?= cc
-TESTS := pn rx-batch rx-ownership rx-parse station-frame txfree
+TESTS := pn pn-cache rx-batch rx-ownership rx-refill rx-parse station-frame txfree tx-pool ppe-cache ppe-split
 
 build/test-%: tests/%.c $(wildcard *.h *.c.inc) | build
-	$(HOSTCC) -O2 -Wall -Wextra -Werror $< -o $@
+	$(HOSTCC) -O2 -Wall -Wextra -Werror -pthread $< -o $@
 
 check: $(addprefix build/test-,$(TESTS))
 	@set -e; for test in $^; do $$test; done
