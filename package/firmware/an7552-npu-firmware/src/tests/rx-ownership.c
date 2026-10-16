@@ -39,11 +39,6 @@ __attribute__((unused)) static uint32_t packet_mac_high(volatile uint8_t *p)
 #define RX_REFILL_MIN 0U
 #define RX_HEADER_ALIAS(host) ((volatile uint8_t *)rx_words(host))
 #include "../rro.c.inc"
-/* Core 0 pops PPE return entries concurrently on hardware; these tests run
- * one pop inside every core 1 service call (tests/ppe-split.c interleaves
- * the two harts).
- */
-#define PPE_SPLIT_CORE0_HOOK() native_ppe_pop()
 #include "../ppe.c.inc"
 static void map(uint32_t address, size_t length)
 {
@@ -56,7 +51,6 @@ int main(void)
 	volatile uint32_t *q, *data, *ring, *host, *free_ids, *states;
 	volatile uint8_t *packet;
 	map(AN7552_NPU_BASE, 4096);
-	map(0x3e900000, 0x2000);	/* local SRAM: PPE index cache */
 	map(0x44010000, 0xf0000);
 	map(0x441b0000, 0x30000);
 	map(0x442c0000, 0x40000);
@@ -154,13 +148,9 @@ int main(void)
 	*(volatile uint32_t *)(uintptr_t)0x1fb50fe0 = 0xc000002b;
 	native_ppe_service();
 	assert(!ppe[3] && !ppe[12] && ppe[14] == 1 && !states[43]);
-	/* A duplicate return while another frame is outstanding: core 0 pops
-	 * it, core 1 rejects the token (state 0) and stops the PPE path.
-	 */
-	ppe[12] = 1;
 	*(volatile uint32_t *)(uintptr_t)0x1fb50fe0 = 0xc000002b;
 	native_ppe_service();
-	assert(ppe[3] == 4 && ppe[12] == 1);
+	assert(ppe[3] == 4);
 	puts("PASS: RX copy, token translation, source recycle, refill and empty ring");
 	return 0;
 }

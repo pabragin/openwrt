@@ -80,16 +80,13 @@ static void native_txfree(uint32_t band)
 		return;
 	index = q[12];
 	producer = q[2];
-	if (producer == q[15])
+	if (index == read32(q[3] + 12) || producer == q[15])
 		return;
 	descriptor =
 		(void *)(uintptr_t)(((hardware & 0x3fffffff) | 0x40000000) +
 				    index * 16);
-	/* An empty slot is the common case: test its done bit (DDR) before
-	 * paying for the radio's DMA index read (PCIe). Both must agree.
-	 */
 	info = descriptor[1];
-	if (!(info & (1U << 31)) || index == read32(q[3] + 12))
+	if (!(info & (1U << 31)))
 		return;
 	barrier();
 	length = (info >> 16) & 16383;
