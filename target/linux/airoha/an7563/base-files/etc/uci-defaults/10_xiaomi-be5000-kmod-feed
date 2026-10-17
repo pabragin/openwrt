@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+# downloads.openwrt.org has no airoha/an7563 target. The kernel modules of
+# this build are published per kernel build at the URL below; point the
+# target feed there, or drop it when the kernel version is unknown.
+
+. /lib/functions.sh
+
+[ "$(board_name)" = xiaomi,be5000 ] || exit 0
+
+feeds=/etc/apk/repositories.d/distfeeds.list
+base=https://pabragin.github.io/xiaomi-be5000-openwrt/kmods
+kernel=$(apk list -I kernel 2>/dev/null |
+	sed -n "s/^kernel-\([0-9.]*\)~\([0-9a-f]*\)-r[0-9]* .*/\1-\2/p")
+
+if [ -n "$kernel" ]; then
+	sed -i "s,^.*/targets/airoha/an7563/packages/packages.adb\$,$base/$kernel/packages.adb," "$feeds"
+else
+	sed -i "\,/targets/airoha/an7563/,d" "$feeds"
+fi
+
+exit 0
